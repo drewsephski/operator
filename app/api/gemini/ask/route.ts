@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Prompt or messages required' }, { status: 400 });
     }
 
-    let modelName = 'gemini-3.5-flash';
+    let modelName = 'gemini-3.1-flash-lite';
     const config: any = {
       systemInstruction: `You are Operator, a world-class AI Chief of Staff and operations intelligence layer for an executive's Google Workspace (Gmail, Calendar, Drive, Docs, Sheets, Tasks, Contacts, Meet).
 Your tone is concise, dense, razor-sharp, editorial, and actionable—resembling Vercel, Linear, and Superhuman.
@@ -38,7 +38,7 @@ ${workspaceContext ? `\nCURRENT WORKSPACE SNAPSHOT:\n${workspaceContext}` : ''}`
     } else if (modelType === 'low_latency') {
       modelName = 'gemini-3.1-flash-lite';
     } else {
-      modelName = 'gemini-3.5-flash';
+      modelName = 'gemini-3.8-flash';
     }
 
     // Grounding tools: googleMaps cannot be combined with googleSearch

@@ -1,51 +1,21 @@
 'use client';
 
 import * as React from 'react';
-import { Navbar } from '@/components/operator/Navbar';
-import { CommandBar } from '@/components/operator/CommandBar';
-import { ActionApprovalModal } from '@/components/operator/ActionApprovalModal';
-import { MeetingPrepModal } from '@/components/operator/MeetingPrepModal';
-import { TodayTab } from '@/components/operator/TodayTab';
-import { InboxTab } from '@/components/operator/InboxTab';
-import { CalendarTab } from '@/components/operator/CalendarTab';
-import { TasksTab } from '@/components/operator/TasksTab';
-import { ProjectsTab } from '@/components/operator/ProjectsTab';
-import { PeopleTab } from '@/components/operator/PeopleTab';
-import { AskTab } from '@/components/operator/AskTab';
-import { ActivityTab } from '@/components/operator/ActivityTab';
-
+import { Sidebar } from '@/components/operator/Sidebar';
+import { OperatorChat } from '@/components/operator/OperatorChat';
+import { ActivityDrawer } from '@/components/operator/ActivityDrawer';
 import {
   initAuth,
+  googleSignIn,
+  logout,
   getAccessToken,
   testConnection,
   db,
-  handleFirestoreError,
-  OperationType,
 } from '@/lib/firebase';
 import {
-  INITIAL_EMAILS,
-  INITIAL_MEETINGS,
-  INITIAL_TASKS,
-  INITIAL_DRIVE_FILES,
-  INITIAL_CONTACTS,
-  INITIAL_PROJECTS,
-  INITIAL_COMMITMENTS,
-  INITIAL_ACTIVITIES,
-  fetchLiveGmail,
-  fetchLiveCalendar,
-  fetchLiveDrive,
-  sendGmailMessage,
-} from '@/lib/workspace';
-import {
-  EmailItem,
-  CalendarEventItem,
-  TaskItem,
-  DriveFileItem,
-  ContactItem,
-  ProjectItem,
-  CommitmentItem,
-  ActivityLogItem,
+  ChatMessage,
   ApprovalItem,
+  ActivityLogItem,
 } from '@/lib/types';
 import type { User } from 'firebase/auth';
 import {
@@ -53,115 +23,106 @@ import {
   doc,
   setDoc,
   getDocs,
-  onSnapshot,
+  deleteDoc,
 } from 'firebase/firestore';
 
+interface ConversationMeta {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
 export default function OperatorPage() {
-  // Auth & Token State
+  // Auth state
   const [user, setUser] = React.useState<User | null>(null);
   const [liveToken, setLiveToken] = React.useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [isSigningIn, setIsSigningIn] = React.useState(false);
 
-  // Tab State
-  const [activeTab, setActiveTab] = React.useState<string>('today');
+  // Layout state
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(false);
+  const [isActivityOpen, setIsActivityOpen] = React.useState(false);
 
-  // Core Data Stores
-  const [emails, setEmails] = React.useState<EmailItem[]>(INITIAL_EMAILS);
-  const [meetings, setMeetings] = React.useState<CalendarEventItem[]>(INITIAL_MEETINGS);
-  const [tasks, setTasks] = React.useState<TaskItem[]>(INITIAL_TASKS);
-  const [files, setFiles] = React.useState<DriveFileItem[]>(INITIAL_DRIVE_FILES);
-  const [contacts, setContacts] = React.useState<ContactItem[]>(INITIAL_CONTACTS);
-  const [projects, setProjects] = React.useState<ProjectItem[]>(INITIAL_PROJECTS);
-  const [commitments, setCommitments] = React.useState<CommitmentItem[]>(INITIAL_COMMITMENTS);
-  const [activities, setActivities] = React.useState<ActivityLogItem[]>(INITIAL_ACTIVITIES);
+  // Conversations state
+  const [conversations, setConversations] = React.useState<ConversationMeta[]>([]);
+  const [activeConversationId, setActiveConversationId] = React.useState<string>('conv-default');
+  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = React.useState(false);
 
-  // Dialog & Modal State
-  const [isCommandBarOpen, setIsCommandBarOpen] = React.useState(false);
-  const [activeApproval, setActiveApproval] = React.useState<ApprovalItem | null>(null);
-  const [isApprovalModalOpen, setIsApprovalModalOpen] = React.useState(false);
+  // Audit activities
+  const [activities, setActivities] = React.useState<ActivityLogItem[]>([]);
 
-  const [activePrepMeeting, setActivePrepMeeting] = React.useState<CalendarEventItem | null>(null);
-  const [isMeetingPrepModalOpen, setIsMeetingPrepModalOpen] = React.useState(false);
-  const [isGeneratingBriefing, setIsGeneratingBriefing] = React.useState(false);
+  const loadConversationMessages = React.useCallback(async (userId: string, convoId: string) => {
+    try {
+      setActiveConversationId(convoId);
+      const msgsRef = collection(db, 'users', userId, 'conversations', convoId, 'messages');
+      const snap = await getDocs(msgsRef);
+      const msgs: ChatMessage[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        msgs.push({
+          id: d.id,
+          role: data.role,
+          content: data.content,
+          createdAt: data.createdAt,
+          approval: data.approval,
+          calendarResults: data.calendarResults,
+          emailResults: data.emailResults,
+          fileResults: data.fileResults,
+          taskResults: data.taskResults,
+          briefingResult: data.briefingResult,
+        });
+      });
 
-  // Ask prompt pass-through from Command Bar
-  const [askPrompt, setAskPrompt] = React.useState<string>('');
+      msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      setMessages(msgs);
+    } catch (err) {
+      console.warn('Error loading conversation messages:', err);
+    }
+  }, []);
 
-  // Helper to append activity
-  const logActivity = React.useCallback(
-    async (action: string, details: string, status: ActivityLogItem['status']) => {
-      const newAct: ActivityLogItem = {
-        id: `act-${Date.now()}`,
-        action,
-        details,
-        status,
-        timestamp: 'Just now',
-        actor: 'Operator AI',
-      };
-      setActivities((prev) => [newAct, ...prev]);
+  const loadUserData = React.useCallback(async (userId: string) => {
+    try {
+      // Load conversations
+      const convosRef = collection(db, 'users', userId, 'conversations');
+      const convosSnap = await getDocs(convosRef);
+      const loadedConvos: ConversationMeta[] = [];
+      convosSnap.forEach((docSnap) => {
+        const data = docSnap.data();
+        loadedConvos.push({
+          id: docSnap.id,
+          title: data.title || 'Untitled Chat',
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        });
+      });
 
-      if (user?.uid) {
-        try {
-          await setDoc(doc(db, 'users', user.uid, 'activity', newAct.id), {
-            ...newAct,
-            userId: user.uid,
-          });
-        } catch (err) {
-          console.warn('Firestore activity sync note:', err);
-        }
+      if (loadedConvos.length > 0) {
+        setConversations(loadedConvos);
+        // Load messages for the most recent conversation
+        loadConversationMessages(userId, loadedConvos[0].id);
       }
-    },
-    [user]
-  );
 
-  // Sync Live Workspace Data
-  const refreshLiveWorkspaceData = React.useCallback(
-    async (token?: string) => {
-      const currentToken = token || liveToken || getAccessToken();
-      if (!currentToken) return;
+      // Load activities
+      const actRef = collection(db, 'users', userId, 'activity');
+      const actSnap = await getDocs(actRef);
+      const loadedActs: ActivityLogItem[] = [];
+      actSnap.forEach((docSnap) => {
+        const d = docSnap.data();
+        loadedActs.push({
+          id: docSnap.id,
+          action: d.action,
+          details: d.details,
+          status: d.status,
+          timestamp: d.timestamp,
+          actor: d.actor || 'Operator AI',
+        });
+      });
+      setActivities(loadedActs);
+    } catch (err) {
+      console.warn('Firestore load note:', err);
+    }
+  }, [loadConversationMessages]);
 
-      try {
-        setIsRefreshing(true);
-        const [liveEmails, liveMeetings, liveFiles] = await Promise.all([
-          fetchLiveGmail(currentToken),
-          fetchLiveCalendar(currentToken),
-          fetchLiveDrive(currentToken),
-        ]);
-
-        if (liveEmails && liveEmails.length > 0) {
-          setEmails((prev) => [
-            ...liveEmails,
-            ...prev.filter((p) => !liveEmails.some((l) => l.id === p.id)),
-          ]);
-        }
-        if (liveMeetings && liveMeetings.length > 0) {
-          setMeetings((prev) => [
-            ...liveMeetings,
-            ...prev.filter((p) => !liveMeetings.some((l) => l.id === p.id)),
-          ]);
-        }
-        if (liveFiles && liveFiles.length > 0) {
-          setFiles((prev) => [
-            ...liveFiles,
-            ...prev.filter((p) => !liveFiles.some((l) => l.id === p.id)),
-          ]);
-        }
-
-        logActivity(
-          'Refreshed Workspace',
-          'Synced latest Gmail, Calendar, and Drive events via Google 1P API',
-          'completed'
-        );
-      } catch (err) {
-        console.warn('Workspace live fetch note:', err);
-      } finally {
-        setIsRefreshing(false);
-      }
-    },
-    [liveToken, logActivity]
-  );
-
-  // 1. Initialize Auth and test Firestore connection
+  // 1. Initialize Auth and verify connection
   React.useEffect(() => {
     testConnection();
 
@@ -169,433 +130,267 @@ export default function OperatorPage() {
       (authedUser, token) => {
         setUser(authedUser);
         setLiveToken(token);
-        // Refresh live data with user token
-        refreshLiveWorkspaceData(token);
+        loadUserData(authedUser.uid);
       },
       () => {
-        // Unauthenticated or refreshed without in-memory token
+        setUser(null);
+        setLiveToken(null);
       }
     );
 
     return () => {
       unsubscribe();
     };
-  }, [refreshLiveWorkspaceData]);
+  }, [loadUserData]);
 
-  // 2. Global Keyboard Shortcuts: ⌘K or Ctrl+K, and 1-8 navigation
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setIsCommandBarOpen((prev) => !prev);
-      } else if (
-        !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName) &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey
-      ) {
-        if (e.key === '1') setActiveTab('today');
-        else if (e.key === '2') setActiveTab('inbox');
-        else if (e.key === '3') setActiveTab('calendar');
-        else if (e.key === '4') setActiveTab('tasks');
-        else if (e.key === '5') setActiveTab('projects');
-        else if (e.key === '6') setActiveTab('people');
-        else if (e.key === '7') setActiveTab('ask');
-        else if (e.key === '8') setActiveTab('activity');
+  const handleSignIn = async () => {
+    try {
+      setIsSigningIn(true);
+      const res = await googleSignIn();
+      if (res) {
+        setUser(res.user);
+        setLiveToken(res.accessToken);
+        loadUserData(res.user.uid);
       }
+    } catch (err) {
+      console.error('Sign in error:', err);
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await logout();
+    setUser(null);
+    setLiveToken(null);
+    setMessages([]);
+    setConversations([]);
+    setActiveConversationId(`conv-${Date.now()}`);
+  };
+
+  // Helper to append and persist activity
+  const logActivity = async (action: string, details: string, status: ActivityLogItem['status']) => {
+    const newAct: ActivityLogItem = {
+      id: `act-${Date.now()}`,
+      action,
+      details,
+      status,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      actor: 'Operator AI',
+    };
+    setActivities((prev) => [newAct, ...prev]);
+
+    if (user?.uid) {
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'activity', newAct.id), {
+          ...newAct,
+          userId: user.uid,
+        });
+      } catch (err) {
+        console.warn('Firestore activity sync note:', err);
+      }
+    }
+  };
+
+  // Send message to Operator Reasoning Agent
+  const handleSendMessage = async (text: string) => {
+    const userMessage: ChatMessage = {
+      id: `usr-${Date.now()}`,
+      role: 'user',
+      content: text,
+      createdAt: new Date().toISOString(),
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    setIsLoading(true);
 
-  // Approval Execution Handler
-  const handleApproveAction = async (payload: any) => {
-    if (!activeApproval) return;
+    // Check for any currently pending approval that might be refined conversationally
+    const latestApproval = [...messages]
+      .reverse()
+      .find((m) => m.approval && m.approval.status === 'pending')?.approval;
 
-    if (activeApproval.actionType === 'send_email') {
-      const token = liveToken || getAccessToken();
-      if (token && payload.recipient && payload.subject && payload.body) {
-        await sendGmailMessage(token, payload.recipient, payload.subject, payload.body);
-      }
-      logActivity(
-        'Email Sent',
-        `Approved & dispatched email to ${payload.recipient} regarding "${payload.subject}"`,
-        'approved'
-      );
-    } else if (activeApproval.actionType === 'create_task') {
-      const newTask: TaskItem = {
-        id: `task-${Date.now()}`,
-        title: payload.taskTitle || activeApproval.title,
-        notes: activeApproval.summary,
-        due: payload.dueDate || 'Today',
-        status: 'needsAction',
-        source: 'google_tasks',
-        priority: 'p1',
-      };
-      setTasks((prev) => [newTask, ...prev]);
-      logActivity('Task Created', `Created Google Task "${newTask.title}"`, 'approved');
-    } else if (activeApproval.actionType === 'reschedule_meeting') {
-      logActivity(
-        'Meeting Updated',
-        `Adjusted event schedule for "${activeApproval.title}"`,
-        'approved'
-      );
-    }
-
-    setIsApprovalModalOpen(false);
-    setActiveApproval(null);
-  };
-
-  // 1-Click Quick Draft Handler
-  const handleQuickDraft = async (email: EmailItem) => {
     try {
-      const res = await fetch('/api/gemini/draft', {
+      const res = await fetch('/api/gemini/operator', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          actionType: 'email_reply',
-          recipient: email.senderName,
-          context: {
-            subject: email.subject,
-            snippet: email.snippet,
-            aiSummary: email.aiSummary,
-          },
+          prompt: text,
+          history: messages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+          pendingApproval: latestApproval,
+          accessToken: liveToken || getAccessToken(),
+          userEmail: user?.email,
+          currentLocalTime: new Date().toISOString(),
         }),
       });
 
-      let draftBody = email.draftReply?.body || 'Confirmed on my side.';
-      if (res.ok) {
-        const data = await res.json();
-        if (data.draft) draftBody = data.draft;
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to process request');
       }
 
-      setActiveApproval({
-        id: `app-email-${email.id}`,
-        actionType: 'send_email',
-        title: `Reply to ${email.senderName}`,
-        summary: `Draft response to "${email.subject}"`,
-        payload: {
-          recipient: email.senderEmail || `${email.senderName.toLowerCase().replace(' ', '.')}@acme.corp`,
-          subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
-          body: draftBody,
-        },
-        status: 'pending',
+      const assistantMessage: ChatMessage = {
+        id: `ast-${Date.now()}`,
+        role: 'assistant',
+        content: data.text || '',
         createdAt: new Date().toISOString(),
-      });
-      setIsApprovalModalOpen(true);
-    } catch (err) {
-      console.error('Quick draft error:', err);
-    }
-  };
+        approval: data.approval || undefined,
+        calendarResults: data.calendarResults || undefined,
+        emailResults: data.emailResults || undefined,
+        fileResults: data.fileResults || undefined,
+        taskResults: data.taskResults || undefined,
+        briefingResult: data.briefingResult || undefined,
+      };
 
-  // Meeting Prep Briefing Generator
-  const handleTriggerBriefing = async (meeting: CalendarEventItem) => {
-    try {
-      setIsGeneratingBriefing(true);
-      const res = await fetch('/api/gemini/prep-meeting', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          meeting,
-          relatedEmails: emails.slice(0, 3).map((e) => ({ from: e.senderName, subject: e.subject })),
-          relatedDocs: files.slice(0, 2).map((f) => ({ name: f.name })),
-        }),
-      });
+      const updatedAll = [...newMessages, assistantMessage];
+      setMessages(updatedAll);
 
-      if (res.ok) {
-        const briefing = await res.json();
-        setMeetings((prev) =>
-          prev.map((m) =>
-            m.id === meeting.id
-              ? {
-                  ...m,
-                  prepStatus: 'briefing_generated',
-                  aiBriefing: briefing,
-                }
-              : m
-          )
-        );
+      // Persist to Firestore if user signed in
+      if (user?.uid) {
+        const convoId = activeConversationId;
+        // Save conversation metadata
+        const firstMessage = updatedAll[0]?.content || 'New Conversation';
+        const convoTitle = firstMessage.length > 32 ? firstMessage.slice(0, 32) + '...' : firstMessage;
 
-        setActivePrepMeeting((prev) =>
-          prev && prev.id === meeting.id
-            ? { ...prev, prepStatus: 'briefing_generated', aiBriefing: briefing }
-            : prev
-        );
+        await setDoc(doc(db, 'users', user.uid, 'conversations', convoId), {
+          title: convoTitle,
+          updatedAt: new Date().toISOString(),
+          userId: user.uid,
+        });
 
-        logActivity(
-          'Briefing Generated',
-          `Synthesized executive preparation for "${meeting.title}"`,
-          'completed'
-        );
+        // Update local conversations list
+        setConversations((prev) => {
+          const filtered = prev.filter((c) => c.id !== convoId);
+          return [{ id: convoId, title: convoTitle, updatedAt: new Date().toISOString() }, ...filtered];
+        });
+
+        // Save messages in subcollection
+        await setDoc(doc(db, 'users', user.uid, 'conversations', convoId, 'messages', userMessage.id), userMessage);
+        await setDoc(doc(db, 'users', user.uid, 'conversations', convoId, 'messages', assistantMessage.id), assistantMessage);
       }
-    } catch (err) {
-      console.error('Briefing error:', err);
+    } catch (err: any) {
+      console.error('Operator Agent call error:', err);
+      const errorMessage: ChatMessage = {
+        id: `err-${Date.now()}`,
+        role: 'assistant',
+        content: `Operator encountered an issue: ${err.message || 'Please check your connection and try again.'}`,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages([...newMessages, errorMessage]);
     } finally {
-      setIsGeneratingBriefing(false);
+      setIsLoading(false);
     }
   };
 
-  const handleCommandBarExecute = (queryText: string) => {
-    if (queryText.includes('LaunchStack')) {
-      setActiveTab('projects');
-    } else if (queryText.includes('attention') || queryText.includes('today')) {
-      setActiveTab('today');
-    } else if (queryText.includes('promises') || queryText.includes('waiting on')) {
-      setActiveTab('tasks');
-    } else if (queryText.includes('next meeting')) {
-      if (meetings[0]) {
-        setActivePrepMeeting(meetings[0]);
-        setIsMeetingPrepModalOpen(true);
+  // When an approval is executed
+  const handleApprovalExecuted = async (updatedApproval: ApprovalItem) => {
+    // Update local state in messages
+    setMessages((prev) =>
+      prev.map((m) => (m.approval?.id === updatedApproval.id ? { ...m, approval: updatedApproval } : m))
+    );
+
+    // Log in audit log
+    const desc =
+      updatedApproval.actionType === 'send_email'
+        ? `Sent email to ${updatedApproval.payload.recipient} ("${updatedApproval.payload.subject}")`
+        : updatedApproval.actionType === 'create_task'
+        ? `Created task "${updatedApproval.payload.taskTitle}"`
+        : updatedApproval.actionType === 'update_calendar_event'
+        ? `Rescheduled calendar event "${updatedApproval.payload.title}"`
+        : `Executed ${updatedApproval.actionType}`;
+
+    await logActivity('Approved Action Executed', desc, 'approved');
+
+    // Update in Firestore
+    if (user?.uid) {
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'approvals', updatedApproval.id), {
+          ...updatedApproval,
+          userId: user.uid,
+          executedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Firestore approval update note:', err);
       }
-    } else {
-      setAskPrompt(queryText);
-      setActiveTab('ask');
     }
   };
 
-  const TABS = [
-    { id: 'today', label: 'Today', key: '1' },
-    { id: 'inbox', label: 'Inbox', key: '2' },
-    { id: 'calendar', label: 'Calendar', key: '3' },
-    { id: 'tasks', label: 'Tasks', key: '4' },
-    { id: 'projects', label: 'Projects', key: '5' },
-    { id: 'people', label: 'People', key: '6' },
-    { id: 'ask', label: 'Ask', key: '7' },
-    { id: 'activity', label: 'Activity', key: '8' },
-  ];
+  // When user cancels a pending approval
+  const handleApprovalCancelled = async (approvalId: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.approval?.id === approvalId
+          ? { ...m, approval: { ...m.approval, status: 'rejected' } }
+          : m
+      )
+    );
+    await logActivity('Action Cancelled', `User dismissed proposal ${approvalId}`, 'dismissed');
+  };
+
+  // Start new conversation
+  const handleNewConversation = () => {
+    const newId = `conv-${Date.now()}`;
+    setActiveConversationId(newId);
+    setMessages([]);
+  };
+
+  // Delete conversation
+  const handleDeleteConversation = async (id: string) => {
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeConversationId === id) {
+      handleNewConversation();
+    }
+    if (user?.uid) {
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'conversations', id));
+      } catch (err) {
+        console.warn('Firestore delete convo error:', err);
+      }
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-white">
-      {/* 1. Global Navigation Bar */}
-      <Navbar
+    <div className="flex h-screen w-screen overflow-hidden bg-black text-zinc-100 font-sans selection:bg-zinc-800 selection:text-white">
+      {/* 1. Minimalist Sidebar */}
+      <Sidebar
         user={user}
-        onUserChange={(authedUser, token) => {
-          setUser(authedUser);
-          setLiveToken(token);
-          if (token) refreshLiveWorkspaceData(token);
-        }}
-        onOpenCommandBar={() => setIsCommandBarOpen(true)}
-        onRefreshData={() => refreshLiveWorkspaceData()}
-        isRefreshing={isRefreshing}
-        activeTab={activeTab}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
+        isSigningIn={isSigningIn}
         hasLiveToken={!!liveToken}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onSelectConversation={(id) => {
+          if (user?.uid) loadConversationMessages(user.uid, id);
+        }}
+        onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onOpenActivity={() => setIsActivityOpen(true)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
       />
 
-      {/* 2. Secondary Tab Navigation Bar */}
-      <div className="border-b border-zinc-850 bg-zinc-950/70 backdrop-blur-xs sticky top-12 z-30">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 flex items-center justify-between overflow-x-auto py-1">
-          <div className="flex items-center gap-1">
-            {TABS.map((tab) => {
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
-                    isActive
-                      ? 'bg-zinc-900 text-zinc-100 border border-zinc-700 font-semibold shadow-xs'
-                      : 'text-zinc-400 hover:text-zinc-200 border border-transparent hover:bg-zinc-900/40'
-                  }`}
-                >
-                  <span>{tab.label}</span>
-                  <span className="font-mono text-[10px] text-zinc-500 opacity-60">
-                    {tab.key}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="hidden md:flex items-center gap-2 text-[11px] font-mono text-zinc-500">
-            <span>Press keys 1-8 to navigate</span>
-            <span>·</span>
-            <span>⌘K for Command Bar</span>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Main Workspace Canvas */}
-      <main className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 pt-5">
-        {activeTab === 'today' && (
-          <TodayTab
-            emails={emails}
-            meetings={meetings}
-            tasks={tasks}
-            files={files}
-            commitments={commitments}
-            onOpenMeetingPrep={(meeting) => {
-              setActivePrepMeeting(meeting);
-              setIsMeetingPrepModalOpen(true);
-            }}
-            onInitiateApproval={(appr) => {
-              setActiveApproval(appr);
-              setIsApprovalModalOpen(true);
-            }}
-            onQuickDraft={handleQuickDraft}
-            onNavigateTab={(t) => setActiveTab(t)}
-            onCompleteTask={(taskId) => {
-              setTasks((prev) =>
-                prev.map((t) => (t.id === taskId ? { ...t, status: 'completed' } : t))
-              );
-              logActivity('Completed Task', `Marked task as completed`, 'completed');
-            }}
-          />
-        )}
-
-        {activeTab === 'inbox' && (
-          <InboxTab
-            emails={emails}
-            onInitiateApproval={(appr) => {
-              setActiveApproval(appr);
-              setIsApprovalModalOpen(true);
-            }}
-            onQuickDraft={handleQuickDraft}
-            onArchiveEmail={(id) => {
-              setEmails((prev) => prev.filter((e) => e.id !== id));
-              logActivity('Archived Email', `Archived thread ${id}`, 'completed');
-            }}
-            onOpenCompose={() => {
-              setActiveApproval({
-                id: `app-compose-${Date.now()}`,
-                actionType: 'send_email',
-                title: 'Compose Email',
-                summary: 'Proposed email to external recipient',
-                payload: {
-                  recipient: 'sarah.chen@acme.corp',
-                  subject: 'Operational update',
-                  body: 'Hi Sarah,\n\nFollowing up on our launch milestones for Friday.\n\nBest,\nDrew',
-                },
-                status: 'pending',
-                createdAt: new Date().toISOString(),
-              });
-              setIsApprovalModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'calendar' && (
-          <CalendarTab
-            meetings={meetings}
-            onOpenMeetingPrep={(meeting) => {
-              setActivePrepMeeting(meeting);
-              setIsMeetingPrepModalOpen(true);
-            }}
-            onInitiateApproval={(appr) => {
-              setActiveApproval(appr);
-              setIsApprovalModalOpen(true);
-            }}
-            onTriggerBriefing={handleTriggerBriefing}
-            isGeneratingBriefing={isGeneratingBriefing}
-          />
-        )}
-
-        {activeTab === 'tasks' && (
-          <TasksTab
-            tasks={tasks}
-            commitments={commitments}
-            onAddTask={(title, priority, due) => {
-              const newTask: TaskItem = {
-                id: `task-${Date.now()}`,
-                title,
-                due: due || 'Today',
-                priority,
-                status: 'needsAction',
-                source: 'google_tasks',
-              };
-              setTasks((prev) => [newTask, ...prev]);
-              logActivity('Added Task', `Created task "${title}"`, 'completed');
-            }}
-            onCompleteTask={(taskId) => {
-              setTasks((prev) =>
-                prev.map((t) =>
-                  t.id === taskId
-                    ? { ...t, status: t.status === 'completed' ? 'needsAction' : 'completed' }
-                    : t
-                )
-              );
-            }}
-            onInitiateApproval={(appr) => {
-              setActiveApproval(appr);
-              setIsApprovalModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'projects' && (
-          <ProjectsTab
-            projects={projects}
-            emails={emails}
-            files={files}
-            meetings={meetings}
-            onOpenMeetingPrep={(meeting) => {
-              setActivePrepMeeting(meeting);
-              setIsMeetingPrepModalOpen(true);
-            }}
-            onQuickDraft={handleQuickDraft}
-          />
-        )}
-
-        {activeTab === 'people' && (
-          <PeopleTab
-            contacts={contacts}
-            onInitiateApproval={(appr) => {
-              setActiveApproval(appr);
-              setIsApprovalModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'ask' && (
-          <AskTab
-            emails={emails}
-            meetings={meetings}
-            tasks={tasks}
-            files={files}
-            commitments={commitments}
-            initialPrompt={askPrompt}
-          />
-        )}
-
-        {activeTab === 'activity' && <ActivityTab activities={activities} />}
+      {/* 2. Main Conversation Stream (The Application) */}
+      <main className="flex flex-1 flex-col h-full overflow-hidden bg-black">
+        <OperatorChat
+          messages={messages}
+          onSendMessage={handleSendMessage}
+          isLoading={isLoading}
+          accessToken={liveToken}
+          user={user}
+          onSignIn={handleSignIn}
+          onApprovalExecuted={handleApprovalExecuted}
+          onApprovalCancelled={handleApprovalCancelled}
+        />
       </main>
 
-      {/* 4. Global ⌘K Command Dialog */}
-      <CommandBar
-        isOpen={isCommandBarOpen}
-        onClose={() => setIsCommandBarOpen(false)}
-        onExecuteCommand={handleCommandBarExecute}
-        onNavigateTab={(tab) => setActiveTab(tab)}
-      />
-
-      {/* 5. Explicit External Action Approval Modal */}
-      <ActionApprovalModal
-        isOpen={isApprovalModalOpen}
-        approval={activeApproval}
-        onClose={() => {
-          setIsApprovalModalOpen(false);
-          setActiveApproval(null);
-        }}
-        onApprove={handleApproveAction}
-        onDismiss={() => {
-          if (activeApproval) {
-            logActivity('Dismissed Proposal', `User rejected action "${activeApproval.title}"`, 'dismissed');
-          }
-          setIsApprovalModalOpen(false);
-          setActiveApproval(null);
-        }}
-      />
-
-      {/* 6. Meeting Briefing Deep-Dive Modal */}
-      <MeetingPrepModal
-        isOpen={isMeetingPrepModalOpen}
-        meeting={activePrepMeeting}
-        onClose={() => {
-          setIsMeetingPrepModalOpen(false);
-          setActivePrepMeeting(null);
-        }}
-        onTriggerBriefing={handleTriggerBriefing}
-        isGeneratingBriefing={isGeneratingBriefing}
+      {/* 3. Audit & Activity Slide-out Drawer */}
+      <ActivityDrawer
+        isOpen={isActivityOpen}
+        onClose={() => setIsActivityOpen(false)}
+        activities={activities}
+        onClearHistory={() => setActivities([])}
       />
     </div>
   );

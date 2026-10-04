@@ -23,7 +23,7 @@ Answer the 5 core operational questions with sharp, high-density editorial clari
 6. recommendedNextActions: 3 prioritized next steps with specific actionable titles and draft proposal text.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-3.1-flash-lite',
       contents: prompt,
       config: {
         systemInstruction:

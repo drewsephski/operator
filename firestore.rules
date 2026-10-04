@@ -38,6 +38,14 @@ service cloud.firestore {
       match /activity/{activityId} {
         allow read, write: if isOwner(userId) && isValidId(userId) && isValidId(activityId);
       }
+
+      match /conversations/{conversationId} {
+        allow read, write: if isOwner(userId) && isValidId(userId) && isValidId(conversationId);
+
+        match /messages/{messageId} {
+          allow read, write: if isOwner(userId) && isValidId(userId) && isValidId(conversationId) && isValidId(messageId);
+        }
+      }
     }
   }
 }

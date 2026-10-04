@@ -115,21 +115,52 @@ export interface CommitmentItem {
 
 export interface ApprovalItem {
   id: string;
-  actionType: 'send_email' | 'create_task' | 'reschedule_meeting' | 'update_doc';
+  actionType: 'send_email' | 'create_calendar_event' | 'update_calendar_event' | 'create_task' | 'complete_task';
   title: string;
   summary: string;
   payload: {
     recipient?: string;
     subject?: string;
     body?: string;
+    title?: string;
+    startTime?: string;
+    endTime?: string;
+    date?: string;
+    eventId?: string;
     taskTitle?: string;
     dueDate?: string;
-    eventId?: string;
-    newTime?: string;
-    docId?: string;
+    taskId?: string;
+    taskListId?: string;
   };
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'executed';
+  executionResult?: {
+    success: boolean;
+    message: string;
+    timestamp: string;
+    id?: string;
+  };
   createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  approval?: ApprovalItem;
+  calendarResults?: CalendarEventItem[];
+  emailResults?: EmailItem[];
+  fileResults?: DriveFileItem[];
+  taskResults?: TaskItem[];
+  briefingResult?: {
+    meetingTitle: string;
+    meetingTime: string;
+    objective: string;
+    keyParticipants: string[];
+    unresolvedQuestions: string[];
+    talkingPoints: string[];
+    relatedFiles?: { name: string; type: string; url?: string }[];
+  };
 }
 
 export interface ProjectItem {
