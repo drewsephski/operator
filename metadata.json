@@ -1,0 +1,6 @@
+{
+  "name": "Operator",
+  "description": "A minimal AI command center for your entire Google Workspace.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

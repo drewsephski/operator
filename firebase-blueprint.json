@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User preferences and operational settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "theme": { "type": "string" },
+        "briefingTime": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "email"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Intelligent workspace connecting emails, meetings, documents, and tasks",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["active", "paused", "completed"] },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "name", "status"]
+    },
+    "Commitment": {
+      "title": "Commitment",
+      "description": "AI-extracted promises, commitments, and pending items",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string", "maxLength": 256 },
+        "type": { "type": "string", "enum": ["promise_made", "waiting_on", "unanswered_question"] },
+        "source": { "type": "string", "maxLength": 128 },
+        "counterpart": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["pending", "resolved", "dismissed"] },
+        "dueDate": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "title", "type", "status"]
+    },
+    "Approval": {
+      "title": "Approval",
+      "description": "Action proposed by Operator requiring explicit user confirmation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "actionType": { "type": "string", "enum": ["send_email", "create_task", "reschedule_meeting", "update_doc"] },
+        "title": { "type": "string", "maxLength": 256 },
+        "summary": { "type": "string", "maxLength": 1000 },
+        "payload": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string" },
+        "executedAt": { "type": "string" }
+      },
+      "required": ["userId", "actionType", "title", "status"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Audit trail of suggestions, user decisions, and system operations",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "action": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["completed", "approved", "dismissed", "suggested"] },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["userId", "action", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User preferences and metadata"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Workspaces and project hubs owned by the user"
+    },
+    "/users/{userId}/commitments/{commitmentId}": {
+      "schema": "Commitment",
+      "description": "Extracted promises and waiting-on items for the user"
+    },
+    "/users/{userId}/approvals/{approvalId}": {
+      "schema": "Approval",
+      "description": "Pending and past action approvals"
+    },
+    "/users/{userId}/activity/{activityId}": {
+      "schema": "ActivityLog",
+      "description": "Audit history of Operator actions"
+    }
+  }
+}
